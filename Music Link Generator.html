@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Multi-Platform Music Link Generator</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <!-- Inter Font -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+          },
+          colors: {
+            spotify: '#1DB954',
+            youtube: '#FF0000',
+            applemusic: '#FA243C',
+            ytmusic: '#FF0000'
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    :root {
+      --glass-bg: rgba(30, 41, 59, 0.62);
+      --glass-border: rgba(255, 255, 255, 0.09);
+      --field-bg: rgba(15, 23, 42, 0.6);
+      --field-border: rgba(255, 255, 255, 0.12);
+      --accent: #6366f1;
+    }
+
+    :root { box-sizing: border-box; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+    .icon { display: inline-block; width: 1em; height: 1em; vertical-align: -0.125em; flex-shrink: 0; }
+    body {
+      background-color: #0f172a;
+      background-image: radial-gradient(circle at top, #1e1b4b 0%, #0f172a 100%);
+      background-attachment: fixed;
+      min-height: 100vh;
+      min-height: 100dvh;
+      color: #f8fafc;
+      -webkit-text-size-adjust: 100%;
+    }
+
+    .glass {
+      background: var(--glass-bg);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 1px solid var(--glass-border);
+      box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.04) inset,
+        0 18px 40px -12px rgba(2, 6, 23, 0.65);
+    }
+
+    .glass-input {
+      background: var(--field-bg);
+      border: 1px solid var(--field-border);
+    }
+    .glass-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.22), 0 0 18px rgba(99, 102, 241, 0.25);
+    }
+
+    /* Keyboard focus for every interactive control */
+    button:focus-visible,
+    a:focus-visible {
+      outline: 2px solid #818cf8;
+      outline-offset: 2px;
+    }
+
+    /* Song cover card */
+    .cover-frame {
+      box-shadow: 0 14px 30px -10px rgba(2, 6, 23, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.08);
+      background:
+        radial-gradient(circle at 30% 20%, rgba(99, 102, 241, 0.35), transparent 60%),
+        linear-gradient(145deg, #1e1b4b, #172033);
+    }
+    .card-action {
+      color: #cbd5e1;
+      transition: background-color 0.15s ease, color 0.15s ease;
+    }
+    .card-action:hover:not(:disabled) {
+      background: rgba(99, 102, 241, 0.16);
+      color: #fff;
+    }
+    .card-action:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    /* A single reveal when a result arrives */
+    @keyframes result-in {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .result-in { animation: result-in 0.35s ease-out both; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .result-in { animation: none; }
+      * { transition-duration: 0.01ms !important; }
+    }
+  </style>
+</head>
+<body class="font-sans antialiased flex flex-col justify-between p-4 sm:p-6 md:p-8">
+
+  <!-- Toast Notification -->
+  <div id="toast" role="status" aria-live="polite" class="fixed top-4 left-4 right-4 sm:left-auto sm:right-5 sm:top-5 sm:max-w-sm z-50 transform translate-y-[-100px] opacity-0 pointer-events-none transition-all duration-300 ease-in-out bg-indigo-600 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 border border-indigo-400">
+    <i class="fa-solid fa-check-circle text-lg"></i>
+    <span id="toast-message" class="font-medium text-sm">Copied to clipboard!</span>
+  </div>
+
+  <div class="max-w-2xl mx-auto w-full my-auto py-6 sm:py-8">
+
+    <!-- Header -->
+    <div class="text-center mb-8">
+      <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 mb-4 shadow-inner">
+        <i class="fa-solid fa-music text-2xl"></i>
+      </div>
+      <h1 class="text-3xl sm:text-4xl font-bold tracking-tight text-white mb-2">Music Link Generator</h1>
+      <p class="text-slate-400 text-sm sm:text-base max-w-md mx-auto">Paste a URL or type "Artist - Song" to generate direct streaming links.</p>
+    </div>
+
+    <!-- Search Input Box -->
+    <div class="glass rounded-2xl p-4 sm:p-5 mb-6">
+      <form id="search-form" onsubmit="handleSearch(event)" class="relative flex flex-col sm:flex-row gap-3">
+        <div class="relative flex-1">
+          <i class="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"></i>
+          <input
+            type="text"
+            id="query-input"
+            placeholder="Enter a song title or paste a URL..."
+            aria-label="Song title or music URL"
+            autocomplete="off"
+            enterkeyhint="search"
+            class="w-full glass-input text-white text-base sm:text-base rounded-xl pl-11 pr-10 py-3.5 outline-none transition duration-200 placeholder-slate-500"
+            required
+          >
+          <button
+            type="button"
+            id="clear-btn"
+            onclick="clearInput()"
+            aria-label="Clear input"
+            class="hidden absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-1.5 rounded-full transition"
+          >
+            <i class="fa-solid fa-xmark text-sm"></i>
+          </button>
+        </div>
+        <button
+          type="submit"
+          id="submit-btn"
+          class="bg-indigo-600 hover:bg-indigo-500 active:scale-95 disabled:opacity-60 disabled:cursor-wait text-white font-medium px-6 py-3.5 rounded-xl shadow-lg shadow-indigo-950/50 transition duration-200 flex items-center justify-center gap-2 whitespace-nowrap"
+        >
+          <span>Get Links</span>
+          <i class="fa-solid fa-arrow-right text-xs"></i>
+        </button>
+      </form>
+    </div>
+
+    <!-- Loading State -->
+    <div id="loading" class="hidden glass rounded-2xl p-8 text-center my-6">
+      <div class="inline-block animate-spin rounded-full h-8 w-8 border-4 border-indigo-500 border-t-transparent mb-3"></div>
+      <p class="text-slate-300 font-medium">Searching platforms...</p>
+    </div>
+
+    <!-- Error State -->
+    <div id="error-card" class="hidden glass rounded-2xl p-6 text-center my-6 border border-red-500/30 bg-red-950/20">
+      <i class="fa-solid fa-circle-exclamation text-red-400 text-3xl mb-2"></i>
+      <h3 class="text-lg font-semibold text-white">Song Not Found</h3>
+      <p id="error-message" class="text-slate-400 text-sm mt-1">Unable to resolve direct links. Try using a specific Spotify or YouTube track link.</p>
+    </div>
+
+    <!-- Results Display -->
+    <div id="results" class="hidden space-y-5">
+
+      <!-- Song Cover Card -->
+      <div class="glass relative rounded-3xl overflow-hidden w-full max-w-sm mx-auto">
+        <!-- Soft ambient glow from the artwork (decorative) -->
+        <img id="cover-glow" alt="" aria-hidden="true" referrerpolicy="no-referrer"
+          class="hidden absolute inset-0 w-full h-full object-cover scale-150 blur-3xl opacity-25 pointer-events-none select-none">
+
+        <div class="relative p-4 sm:p-5 pb-0">
+          <div class="cover-frame relative aspect-square w-full rounded-2xl overflow-hidden">
+            <img id="cover-img" alt="" referrerpolicy="no-referrer" decoding="async"
+              class="absolute inset-0 w-full h-full object-cover opacity-0 transition-opacity duration-500">
+            <div id="cover-fallback" class="absolute inset-0 flex flex-col items-center justify-center gap-2 text-indigo-300/70">
+              <i class="fa-solid fa-compact-disc text-6xl"></i>
+              <span class="text-xs font-medium text-slate-400">No artwork available</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="relative px-5 pt-5 pb-5 text-center">
+          <h2 id="song-title" class="text-lg sm:text-xl font-semibold text-white leading-snug break-words"></h2>
+          <p id="song-artist" class="hidden text-sm sm:text-base text-slate-300/90 mt-1 break-words"></p>
+        </div>
+
+        <div class="relative grid grid-cols-3 divide-x divide-white/10 border-t border-white/10 bg-slate-950/35 text-sm font-medium">
+          <button type="button" onclick="copyAllMarkdown()" class="card-action py-3.5 px-2 flex items-center justify-center gap-2">
+            <i class="fa-regular fa-copy text-xs"></i><span>Copy All</span>
+          </button>
+          <button type="button" id="embed-btn" onclick="copyEmbedCode()" class="card-action py-3.5 px-2 flex items-center justify-center gap-2">
+            <i class="fa-solid fa-code text-xs"></i><span>Embed</span>
+          </button>
+          <button type="button" onclick="shareResult()" class="card-action py-3.5 px-2 flex items-center justify-center gap-2">
+            <i class="fa-solid fa-share-nodes text-xs"></i><span>Share</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Listen Panel -->
+      <div class="glass rounded-2xl p-4 sm:p-6">
+        <h3 class="text-base font-semibold text-white mb-4">Listen</h3>
+
+        <!-- Individual Links List -->
+        <div class="space-y-3">
+
+          <!-- YouTube -->
+          <div class="flex items-center justify-between glass-input p-3 sm:p-4 rounded-xl gap-3">
+            <div class="flex items-center gap-3 min-w-0 flex-1">
+              <div class="w-9 h-9 rounded-lg bg-red-600/20 text-red-500 flex items-center justify-center shrink-0">
+                <i class="fa-brands fa-youtube text-lg"></i>
+              </div>
+              <div class="min-w-0 flex-1">
+                <div class="text-xs text-slate-400 font-medium">YouTube</div>
+                <a id="link-youtube" href="#" target="_blank" rel="noopener noreferrer" class="text-xs sm:text-sm text-slate-200 hover:text-white truncate block hover:underline">Link</a>
+              </div>
+            </div>
+            <button onclick="copySingle('youtube')" aria-label="Copy YouTube link" class="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-slate-800 transition shrink-0">
+              <i class="fa-regular fa-copy"></i>
+            </button>
+          </div>
+
+          <!-- YouTube Music -->
+          <div class="flex items-center justify-between glass-input p-3 sm:p-4 rounded-xl gap-3">
+            <div class="flex items-center gap-3 min-w-0 flex-1">
+              <div class="w-9 h-9 rounded-lg bg-red-600/20 text-red-400 flex items-center justify-center shrink-0">
+                <i class="fa-solid fa-circle-play text-lg"></i>
+              </div>
+              <div class="min-w-0 flex-1">
+                <div class="text-xs text-slate-400 font-medium">YouTube Music</div>
+                <a id="link-ytmusic" href="#" target="_blank" rel="noopener noreferrer" class="text-xs sm:text-sm text-slate-200 hover:text-white truncate block hover:underline">Link</a>
+              </div>
+            </div>
+            <button onclick="copySingle('ytmusic')" aria-label="Copy YouTube Music link" class="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-slate-800 transition shrink-0">
+              <i class="fa-regular fa-copy"></i>
+            </button>
+          </div>
+
+          <!-- Spotify -->
+          <div class="flex items-center justify-between glass-input p-3 sm:p-4 rounded-xl gap-3">
+            <div class="flex items-center gap-3 min-w-0 flex-1">
+              <div class="w-9 h-9 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                <i class="fa-brands fa-spotify text-lg"></i>
+              </div>
+              <div class="min-w-0 flex-1">
+                <div class="text-xs text-slate-400 font-medium">Spotify</div>
+                <a id="link-spotify" href="#" target="_blank" rel="noopener noreferrer" class="text-xs sm:text-sm text-slate-200 hover:text-white truncate block hover:underline">Link</a>
+              </div>
+            </div>
+            <button onclick="copySingle('spotify')" aria-label="Copy Spotify link" class="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-slate-800 transition shrink-0">
+              <i class="fa-regular fa-copy"></i>
+            </button>
+          </div>
+
+          <!-- Apple Music -->
+          <div class="flex items-center justify-between glass-input p-3 sm:p-4 rounded-xl gap-3">
+            <div class="flex items-center gap-3 min-w-0 flex-1">
+              <div class="w-9 h-9 rounded-lg bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0">
+                <i class="fa-brands fa-apple text-lg"></i>
+              </div>
+              <div class="min-w-0 flex-1">
+                <div class="text-xs text-slate-400 font-medium">Apple Music</div>
+                <a id="link-applemusic" href="#" target="_blank" rel="noopener noreferrer" class="text-xs sm:text-sm text-slate-200 hover:text-white truncate block hover:underline">Link</a>
+              </div>
+            </div>
+            <button onclick="copySingle('applemusic')" aria-label="Copy Apple Music link" class="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-slate-800 transition shrink-0">
+              <i class="fa-regular fa-copy"></i>
+            </button>
+          </div>
+
+        </div>
+
+        <!-- Clean Text Output Block -->
+        <div class="mt-6 pt-5 border-t border-slate-700/60">
+          <label for="markdown-preview" class="text-sm font-medium text-slate-300 block mb-2">Text preview</label>
+          <textarea
+            id="markdown-preview"
+            rows="6"
+            readonly
+            class="w-full glass-input text-slate-300 font-mono text-xs sm:text-sm p-3 rounded-xl focus:outline-none resize-none"
+          ></textarea>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- Footer -->
+  <div class="text-center text-xs text-slate-500 py-4">
+    Powered by Odesli / Songlink API
+  </div>
+
+  <script>
+    // Inline SVG icons replace the Font Awesome stylesheet, which a published page cannot load.
+    (function () {
+      var S = 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+      var ICONS = {
+        'fa-music': '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+        'fa-magnifying-glass': '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+        'fa-xmark': '<path d="M18 6 6 18M6 6l12 12"/>',
+        'fa-check-circle': '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+        'fa-circle-exclamation': '<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>',
+        'fa-copy': '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+        'fa-code': '<path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/>',
+        'fa-share-nodes': '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
+        'fa-arrow-right': '<path d="M5 12h14M12 5l7 7-7 7"/>',
+        'fa-compact-disc': '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><path d="M12 2a10 10 0 0 0-8 4"/>',
+        'fa-circle-play': '<circle cx="12" cy="12" r="10"/><path d="m10 8 6 4-6 4z" fill="currentColor"/>',
+        'fa-youtube': '<rect x="2" y="5" width="20" height="14" rx="4"/><path d="m10 9 5 3-5 3z" fill="currentColor"/>',
+        'fa-spotify': '<circle cx="12" cy="12" r="10"/><path d="M7 9.5c3.5-1 7.5-.7 10.5 1M7.5 12.7c3-.8 6-.5 8.5 1M8 15.7c2.4-.6 4.6-.3 6.5.8"/>',
+        'fa-apple': '<path d="M12 7c-2-2-6-1-6 4 0 4 2 8 4 8 1 0 1.5-.5 2-.5s1 .5 2 .5c2 0 4-4 4-8 0-5-4-6-6-4z"/><path d="M12 7c0-2 1-3 3-3"/>'
+      };
+      document.querySelectorAll('i[class*="fa-"]').forEach(function (el) {
+        var key = Object.keys(ICONS).find(function (k) { return el.classList.contains(k); });
+        if (!key) return;
+        var span = document.createElement('span');
+        span.className = el.className.split(/\s+/).filter(function (c) { return !/^fa-|^fa$/.test(c); }).join(' ');
+        span.setAttribute('aria-hidden', 'true');
+        span.innerHTML = '<svg class="icon" viewBox="0 0 24 24" ' + S + '>' + ICONS[key] + '</svg>';
+        el.replaceWith(span);
+      });
+    })();
+  </script>
+
+  <script>
+    /**
+     * @typedef {{ title: string, artist: string, artwork: string }} Song
+     * @typedef {{ youtube: string, ytmusic: string, spotify: string, applemusic: string }} Links
+     * @typedef {{ song: Song, links: Links }} SearchResult
+     */
+
+    const queryInput = document.getElementById('query-input');
+    const clearBtn = document.getElementById('clear-btn');
+    const submitBtn = document.getElementById('submit-btn');
+    const resultsDiv = document.getElementById('results');
+    const loadingDiv = document.getElementById('loading');
+    const errorDiv = document.getElementById('error-card');
+    const errorMessage = document.getElementById('error-message');
+
+    const coverImg = document.getElementById('cover-img');
+    const coverGlow = document.getElementById('cover-glow');
+    const coverFallback = document.getElementById('cover-fallback');
+    const embedBtn = document.getElementById('embed-btn');
+
+    /** @type {{ song: Song, links: Links, label: string }} */
+    let currentData = {
+      song: { title: '', artist: '', artwork: '' },
+      label: '',
+      links: {
+        youtube: '',
+        ytmusic: '',
+        spotify: '',
+        applemusic: ''
+      }
+    };
+
+    // Guards against an older, slower search overwriting a newer one
+    let activeSearchId = 0;
+    let toastTimer = null;
+
+    // Toggle clear button on input
+    queryInput.addEventListener('input', () => {
+      clearBtn.classList.toggle('hidden', queryInput.value.length === 0);
+    });
+
+    function clearInput() {
+      queryInput.value = '';
+      clearBtn.classList.add('hidden');
+      queryInput.focus();
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      document.getElementById('toast-message').textContent = msg;
+      toast.classList.remove('translate-y-[-100px]', 'opacity-0');
+      toast.classList.add('translate-y-0', 'opacity-100');
+
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        toast.classList.remove('translate-y-0', 'opacity-100');
+        toast.classList.add('translate-y-[-100px]', 'opacity-0');
+      }, 2500);
+    }
+
+    function isValidUrl(string) {
+      try {
+        new URL(string);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    // Only https image URLs are ever used for artwork (http is upgraded)
+    function normalizeImageUrl(value) {
+      if (typeof value !== 'string' || !value) return '';
+      const upgraded = value.replace(/^http:\/\//i, 'https://');
+      try {
+        return new URL(upgraded).protocol === 'https:' ? upgraded : '';
+      } catch (_) {
+        return '';
+      }
+    }
+
+    // iTunes returns 100x100 artwork; the same CDN path serves larger sizes
+    function upscaleItunesArtwork(url) {
+      const safe = normalizeImageUrl(url);
+      if (!safe) return '';
+      return safe.replace(/\/\d+x\d+bb\.(jpg|png)$/i, '/600x600bb.$1');
+    }
+
+    // Extract YouTube Video ID from any standard/shortened YouTube URL
+    function extractYouTubeId(urlStr) {
+      try {
+        const url = new URL(urlStr);
+        if (url.hostname.includes('youtu.be')) {
+          return url.pathname.slice(1).split('/')[0];
+        }
+        if (url.hostname.includes('youtube.com')) {
+          return url.searchParams.get('v');
+        }
+      } catch (e) {
+        return null;
+      }
+      return null;
+    }
+
+    // Clean tracking parameters from Spotify/Apple Music URLs
+    function sanitizeUrl(urlStr) {
+      try {
+        const url = new URL(urlStr);
+        if (url.hostname.includes('youtu.be') || url.hostname.includes('youtube.com')) {
+          const videoId = extractYouTubeId(urlStr);
+          if (videoId) return `https://youtu.be/${videoId}`;
+        }
+        if (url.hostname.includes('spotify.com')) {
+          return `${url.origin}${url.pathname}`;
+        }
+        if (url.hostname.includes('apple.com')) {
+          // Keep the "i" parameter: it is what points at the track instead of the album
+          const trackId = url.searchParams.get('i');
+          const suffix = trackId ? `?i=${encodeURIComponent(trackId)}` : '';
+          return `${url.origin}${url.pathname}${suffix}`;
+        }
+      } catch (e) {
+        return urlStr;
+      }
+      return urlStr;
+    }
+
+    function formatSongLabel(song) {
+      return song.artist ? `${song.artist} - ${song.title}` : song.title;
+    }
+
+    async function handleSearch(e) {
+      e.preventDefault();
+      const input = queryInput.value.trim();
+      if (!input) return;
+
+      const searchId = ++activeSearchId;
+
+      resultsDiv.classList.add('hidden');
+      errorDiv.classList.add('hidden');
+      loadingDiv.classList.remove('hidden');
+      submitBtn.disabled = true;
+
+      try {
+        /** @type {SearchResult | null} */
+        let result = null;
+
+        if (isValidUrl(input)) {
+          // Clean parameters like ?list= or ?si= before calling API
+          const cleanUrl = sanitizeUrl(input);
+          const ytId = extractYouTubeId(cleanUrl);
+
+          // Attempt Odesli API
+          result = await tryOdesliApi(cleanUrl, ytId);
+          if (!result && ytId) {
+            // Fallback for YouTube links when Odesli API fails
+            result = await handleYouTubeFallback(ytId);
+          } else if (!result) {
+            throw new Error('Could not resolve links from this URL.');
+          }
+        } else {
+          // Plain text query, e.g. "Artist - Title"
+          result = await handleTextSearch(input);
+        }
+
+        if (searchId !== activeSearchId) return;
+        displayResults(result.song, result.links);
+      } catch (err) {
+        if (searchId !== activeSearchId) return;
+        showError('Could not retrieve song data. Please verify the URL or try searching by "Artist - Title".');
+      } finally {
+        if (searchId === activeSearchId) {
+          loadingDiv.classList.add('hidden');
+          submitBtn.disabled = false;
+        }
+      }
+    }
+
+    // Prefer a streaming-service entity for title/artist: a YouTube entity usually
+    // carries the channel name and the full video title instead.
+    function pickMetaEntity(data) {
+      const entities = data.entitiesByUniqueId || {};
+      const withTitle = Object.values(entities).filter(en => en && en.title);
+      if (withTitle.length === 0) return null;
+
+      const primary = entities[data.entityUniqueId];
+      if (primary && primary.title && primary.apiProvider !== 'youtube') return primary;
+      return withTitle.find(en => en.apiProvider !== 'youtube') || primary || withTitle[0];
+    }
+
+    // Odesli entities expose thumbnailUrl (+ width/height). Prefer album art from a
+    // streaming service over a YouTube video frame, then the largest image.
+    function pickOdesliArtwork(data) {
+      const candidates = Object.values(data.entitiesByUniqueId || {})
+        .filter(en => en && normalizeImageUrl(en.thumbnailUrl))
+        .sort((a, b) => {
+          const aVideo = a.apiProvider === 'youtube' ? 1 : 0;
+          const bVideo = b.apiProvider === 'youtube' ? 1 : 0;
+          if (aVideo !== bVideo) return aVideo - bVideo;
+          return (b.thumbnailWidth || 0) - (a.thumbnailWidth || 0);
+        });
+
+      if (candidates.length === 0) return { url: '', isVideoFrame: false };
+      const best = candidates[0];
+      return {
+        url: normalizeImageUrl(best.thumbnailUrl),
+        isVideoFrame: best.apiProvider === 'youtube'
+      };
+    }
+
+    /** @returns {Promise<SearchResult | null>} */
+    async function tryOdesliApi(cleanUrl, ytId) {
+      try {
+        const apiUrl = `https://api.song.link/v1-alpha.1/links?url=${encodeURIComponent(cleanUrl)}`;
+        const response = await fetch(apiUrl);
+        if (!response.ok) return null;
+
+        const data = await response.json();
+        const linksByPlatform = data.linksByPlatform || {};
+
+        let songTitle = 'Music Links';
+        let trackName = 'Music Links';
+        let artistName = '';
+        const meta = pickMetaEntity(data);
+        if (meta) {
+          trackName = meta.title;
+          artistName = meta.artistName || '';
+          songTitle = artistName ? `${artistName} - ${trackName}` : trackName;
+        }
+        const hasMeta = songTitle !== 'Music Links';
+
+        let artwork = pickOdesliArtwork(data);
+
+        // Build links with fallback constructs
+        const youtube = ytId ? `https://youtu.be/${ytId}` : (linksByPlatform.youtube?.url || sanitizeUrl(linksByPlatform.youtubeMusic?.url || ''));
+        const ytmusic = ytId ? `https://music.youtube.com/watch?v=${ytId}` : (linksByPlatform.youtubeMusic?.url || (linksByPlatform.youtube?.url ? linksByPlatform.youtube.url.replace('youtube.com', 'music.youtube.com') : ''));
+        const spotify = sanitizeUrl(linksByPlatform.spotify?.url || '');
+        const applemusic = sanitizeUrl(linksByPlatform.appleMusic?.url || '');
+
+        // If Apple or Spotify link (or real artwork) is missing, attempt iTunes search enhancement
+        let finalSpotify = spotify;
+        let finalApple = applemusic;
+        const needsArtwork = !artwork.url || artwork.isVideoFrame;
+
+        if ((!finalSpotify || !finalApple || needsArtwork) && hasMeta) {
+          const enriched = await searchiTunesFallback(songTitle);
+          if (!finalApple && enriched.applemusic) finalApple = enriched.applemusic;
+          if (!finalSpotify && enriched.spotify) finalSpotify = enriched.spotify;
+          if (needsArtwork && enriched.artwork) artwork = { url: enriched.artwork, isVideoFrame: false };
+        }
+
+        return {
+          song: { title: trackName, artist: artistName, artwork: artwork.url },
+          links: {
+            youtube: youtube || generateSearchUrl('youtube', songTitle),
+            ytmusic: ytmusic || generateSearchUrl('ytmusic', songTitle),
+            spotify: finalSpotify || generateSearchUrl('spotify', songTitle),
+            applemusic: finalApple || generateSearchUrl('applemusic', songTitle)
+          }
+        };
+      } catch (e) {
+        return null;
+      }
+    }
+
+    /** @returns {Promise<SearchResult>} */
+    async function handleYouTubeFallback(ytId) {
+      const youtube = `https://youtu.be/${ytId}`;
+      const ytmusic = `https://music.youtube.com/watch?v=${ytId}`;
+
+      // Try fetching video title from YouTube oEmbed API
+      let songTitle = 'YouTube Video';
+      let videoThumbnail = '';
+      try {
+        const oembedRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${ytId}&format=json`);
+        if (oembedRes.ok) {
+          const oembedData = await oembedRes.json();
+          songTitle = oembedData.title.replace(/\s*\(Official Video\)/i, '').replace(/\s*\(Audio\)/i, '').trim();
+          videoThumbnail = normalizeImageUrl(oembedData.thumbnail_url);
+        }
+      } catch (e) {}
+
+      // Try locating Apple Music & Spotify using the retrieved title
+      const enriched = await searchiTunesFallback(songTitle);
+
+      return {
+        song: {
+          title: enriched.trackName || songTitle,
+          artist: enriched.artist || '',
+          artwork: enriched.artwork || videoThumbnail
+        },
+        links: {
+          youtube,
+          ytmusic,
+          spotify: enriched.spotify || generateSearchUrl('spotify', songTitle),
+          applemusic: enriched.applemusic || generateSearchUrl('applemusic', songTitle)
+        }
+      };
+    }
+
+    /** @returns {Promise<SearchResult>} */
+    async function handleTextSearch(titleQuery) {
+      const enriched = await searchiTunesFallback(titleQuery);
+      const songTitle = enriched.title || titleQuery;
+
+      return {
+        song: {
+          title: enriched.trackName || titleQuery,
+          artist: enriched.artist || '',
+          artwork: enriched.artwork || ''
+        },
+        links: {
+          youtube: enriched.youtube || generateSearchUrl('youtube', songTitle),
+          ytmusic: enriched.ytmusic || generateSearchUrl('ytmusic', songTitle),
+          spotify: enriched.spotify || generateSearchUrl('spotify', songTitle),
+          applemusic: enriched.applemusic || generateSearchUrl('applemusic', songTitle)
+        }
+      };
+    }
+
+    async function searchiTunesFallback(query) {
+      try {
+        const itunesRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&limit=1&entity=song`);
+        if (itunesRes.ok) {
+          const itunesData = await itunesRes.json();
+          if (itunesData.results && itunesData.results.length > 0) {
+            const track = itunesData.results[0];
+            const cleanTitle = `${track.artistName} - ${track.trackName}`;
+            const appleMusicUrl = sanitizeUrl(track.trackViewUrl);
+            const artwork = upscaleItunesArtwork(track.artworkUrl100);
+
+            // Fetch Spotify link using Apple Music link via Odesli API
+            let spotifyUrl = '';
+            let ytUrl = '';
+            let ytmUrl = '';
+            try {
+              const odesliRes = await fetch(`https://api.song.link/v1-alpha.1/links?url=${encodeURIComponent(appleMusicUrl)}`);
+              if (odesliRes.ok) {
+                const odesliData = await odesliRes.json();
+                spotifyUrl = sanitizeUrl(odesliData.linksByPlatform?.spotify?.url || '');
+                ytUrl = odesliData.linksByPlatform?.youtube?.url || '';
+                ytmUrl = odesliData.linksByPlatform?.youtubeMusic?.url || '';
+              }
+            } catch (e) {}
+
+            return {
+              title: cleanTitle,
+              trackName: track.trackName || '',
+              artist: track.artistName || '',
+              artwork,
+              applemusic: appleMusicUrl,
+              spotify: spotifyUrl,
+              youtube: ytUrl,
+              ytmusic: ytmUrl
+            };
+          }
+        }
+      } catch (e) {}
+
+      return {};
+    }
+
+    function generateSearchUrl(platform, query) {
+      const q = encodeURIComponent(query);
+      switch(platform) {
+        case 'youtube': return `https://www.youtube.com/results?search_query=${q}`;
+        case 'ytmusic': return `https://music.youtube.com/search?q=${q}`;
+        case 'spotify': return `https://open.spotify.com/search/${q}`;
+        case 'applemusic': return `https://music.apple.com/us/search?term=${q}`;
+        default: return '#';
+      }
+    }
+
+    // Shows the artwork if it loads, otherwise keeps the clean placeholder tile
+    function renderCover(song) {
+      const showFallback = () => {
+        coverImg.classList.add('opacity-0');
+        coverImg.removeAttribute('src');
+        coverGlow.classList.add('hidden');
+        coverGlow.removeAttribute('src');
+        coverFallback.classList.remove('hidden');
+      };
+
+      coverImg.onload = null;
+      coverImg.onerror = null;
+      coverGlow.onerror = null;
+
+      const url = normalizeImageUrl(song.artwork);
+      if (!url) {
+        showFallback();
+        return;
+      }
+
+      coverImg.classList.add('opacity-0');
+      coverFallback.classList.remove('hidden');
+      coverImg.alt = song.artist ? `Cover art for ${song.title} by ${song.artist}` : `Cover art for ${song.title}`;
+
+      coverImg.onload = () => {
+        coverImg.classList.remove('opacity-0');
+        coverFallback.classList.add('hidden');
+      };
+      coverImg.onerror = showFallback;
+      coverGlow.onerror = () => coverGlow.classList.add('hidden');
+
+      coverGlow.classList.remove('hidden');
+      coverGlow.src = url;
+      coverImg.src = url;
+    }
+
+    /**
+     * Builds an iframe embed from a real track link. Spotify is preferred; Apple Music is
+     * the alternative. Returns an empty string when only search links are available.
+     */
+    function buildEmbedCode(links) {
+      const spotifyMatch = (links.spotify || '').match(/open\.spotify\.com\/(?:intl-[a-z-]+\/)?track\/([A-Za-z0-9]+)/);
+      if (spotifyMatch) {
+        return `<iframe style="border-radius:12px" src="https://open.spotify.com/embed/track/${spotifyMatch[1]}" width="100%" height="152" frameborder="0" allowfullscreen allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe>`;
+      }
+
+      try {
+        const apple = new URL(links.applemusic);
+        if (apple.hostname === 'music.apple.com' && !apple.pathname.includes('/search')) {
+          const height = apple.searchParams.has('i') ? 175 : 450;
+          const src = `https://embed.music.apple.com${apple.pathname}${apple.search}`.replace(/"/g, '%22');
+          return `<iframe allow="autoplay *; encrypted-media *; fullscreen *; clipboard-write" frameborder="0" height="${height}" style="width:100%;max-width:660px;overflow:hidden;border-radius:10px;" sandbox="allow-forms allow-popups allow-same-origin allow-scripts allow-storage-access-by-user-activation allow-top-navigation-by-user-activation" src="${src}"></iframe>`;
+        }
+      } catch (e) {}
+
+      return '';
+    }
+
+    function updateEmbedButton() {
+      const available = Boolean(buildEmbedCode(currentData.links));
+      embedBtn.disabled = !available;
+      embedBtn.title = available
+        ? 'Copy an embeddable player'
+        : 'Embedding needs a direct Spotify or Apple Music track link';
+    }
+
+    function displayResults(song, links) {
+      const label = formatSongLabel(song);
+      currentData = { song, links, label };
+
+      document.getElementById('song-title').textContent = song.title;
+
+      const artistEl = document.getElementById('song-artist');
+      artistEl.textContent = song.artist;
+      artistEl.classList.toggle('hidden', !song.artist);
+
+      renderCover(song);
+
+      setLink('link-youtube', links.youtube);
+      setLink('link-ytmusic', links.ytmusic);
+      setLink('link-spotify', links.spotify);
+      setLink('link-applemusic', links.applemusic);
+
+      // Clean Output Format
+      const markdown = `${label}\n\nYouTube: ${links.youtube}\nYouTube Music: ${links.ytmusic}\nSpotify: ${links.spotify}\nApple Music: ${links.applemusic}`;
+      document.getElementById('markdown-preview').value = markdown;
+
+      updateEmbedButton();
+
+      resultsDiv.classList.remove('hidden');
+      resultsDiv.classList.remove('result-in');
+      void resultsDiv.offsetWidth; // restart the reveal animation
+      resultsDiv.classList.add('result-in');
+    }
+
+    function setLink(elementId, url) {
+      const el = document.getElementById(elementId);
+      el.href = url;
+      el.textContent = url;
+    }
+
+    function showError(msg) {
+      errorMessage.textContent = msg;
+      errorDiv.classList.remove('hidden');
+    }
+
+    async function copyToClipboard(text, message = 'Copied to clipboard!') {
+      let copied = false;
+
+      if (navigator.clipboard && window.isSecureContext) {
+        try {
+          await navigator.clipboard.writeText(text);
+          copied = true;
+        } catch (e) {}
+      }
+
+      if (!copied) {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-999999px';
+        textarea.style.fontSize = '16px';
+        document.body.appendChild(textarea);
+        textarea.select();
+        try {
+          copied = document.execCommand('copy');
+        } catch (e) {
+          copied = false;
+        }
+        document.body.removeChild(textarea);
+      }
+
+      showToast(copied ? message : 'Copy failed. Select the text and copy it manually.');
+    }
+
+    function copySingle(platform) {
+      if (currentData.links[platform]) {
+        copyToClipboard(currentData.links[platform]);
+      }
+    }
+
+    function copyAllMarkdown() {
+      const text = document.getElementById('markdown-preview').value;
+      if (text) {
+        copyToClipboard(text);
+      }
+    }
+
+    function copyEmbedCode() {
+      const code = buildEmbedCode(currentData.links);
+      if (code) {
+        copyToClipboard(code, 'Embed code copied!');
+      }
+    }
+
+    async function shareResult() {
+      const text = document.getElementById('markdown-preview').value;
+      if (!text) return;
+
+      if (navigator.share) {
+        try {
+          await navigator.share({ title: currentData.label, text });
+          return;
+        } catch (e) {
+          // Closing the share sheet is not an error
+          if (e && e.name === 'AbortError') return;
+        }
+      }
+      // Browsers without the Web Share API (or a failed share) get the links copied instead
+      copyToClipboard(text, 'Sharing is not available here. Links copied instead.');
+    }
+  </script>
+</body>
+</html>
