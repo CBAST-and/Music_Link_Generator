@@ -211,6 +211,9 @@
         </div>
       </div>
 
+      <!-- Notice shown when direct links could not be retrieved -->
+      <div id="notice" role="status" class="hidden w-full rounded-xl border border-amber-500/30 bg-amber-950/25 text-amber-200/90 text-sm leading-relaxed px-4 py-3"></div>
+
       <!-- Listen Panel -->
       <div class="glass rounded-2xl p-4 sm:p-6">
         <h3 class="text-base font-semibold text-white mb-4">Listen</h3>
@@ -372,6 +375,8 @@
     // Guards against an older, slower search overwriting a newer one
     let activeSearchId = 0;
     let toastTimer = null;
+    // Problems met while talking to the APIs during the current search
+    let networkIssues = [];
 
     // Toggle clear button on input
     queryInput.addEventListener('input', () => {
@@ -467,12 +472,121 @@
       return song.artist ? `${song.artist} - ${song.title}` : song.title;
     }
 
+    // Fetch JSON with a timeout; records why a request failed instead of failing silently
+    async function fetchJson(service, url) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 12000);
+      try {
+        const res = await fetch(url, { signal: controller.signal });
+        if (!res.ok) {
+          networkIssues.push(`${service}: ${res.status === 429 ? 'rate limit reached (HTTP 429), wait a minute and try again' : `HTTP ${res.status}`}`);
+          return null;
+        }
+        return await res.json();
+      } catch (e) {
+        networkIssues.push(`${service}: ${e && e.name === 'AbortError' ? 'request timed out' : 'request blocked or failed (CORS or network)'}`);
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    // iTunes supports JSONP, which works when a plain fetch is refused by the browser
+    function jsonp(url) {
+      return new Promise((resolve) => {
+        const cbName = `__jsonp_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+        const script = document.createElement('script');
+        let timer = null;
+        const finish = (value) => {
+          clearTimeout(timer);
+          delete window[cbName];
+          script.remove();
+          resolve(value);
+        };
+        window[cbName] = (payload) => finish(payload);
+        timer = setTimeout(() => finish(null), 8000);
+        script.onerror = () => finish(null);
+        script.src = `${url}&callback=${cbName}`;
+        document.head.appendChild(script);
+      });
+    }
+
+    // Search terms to try in order: as typed, without the " - " separator, without (brackets)
+    function itunesTerms(query) {
+      const spaced = query.replace(/\s+-\s+/g, ' ');
+      const stripped = spaced.replace(/\s*[\(\[][^\)\]]*[\)\]]/g, '').trim();
+      return [...new Set([query, spaced, stripped].filter(Boolean))];
+    }
+
+    async function queryItunes(query) {
+      for (const term of itunesTerms(query)) {
+        const url = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&limit=1&entity=song`;
+        let data = await fetchJson('iTunes', url);
+        if (!data) data = await jsonp(url);
+        if (data && data.results && data.results.length > 0) return data;
+      }
+      return null;
+    }
+
+    function cleanVideoTitle(raw) {
+      const cleaned = String(raw || '')
+        .replace(/\s*[\(\[]\s*(official[^\)\]]*|audio|lyrics?[^\)\]]*|music video|video|visuali[sz]er|hd|4k)\s*[\)\]]/gi, '')
+        .trim();
+      return cleaned || 'YouTube Video';
+    }
+
+    function splitArtistTitle(label) {
+      const match = label.match(/^(.+?)\s+-\s+(.+)$/);
+      return match ? { artist: match[1].trim(), title: match[2].trim() } : { artist: '', title: label };
+    }
+
+    function isSearchLink(url) {
+      return /\/search(\/|\?|$)/.test(url || '') || /results\?search_query=/.test(url || '');
+    }
+
+    // Explains why some links are search pages instead of direct links
+    function buildNotice(links) {
+      const missing = [];
+      if (isSearchLink(links.youtube)) missing.push('YouTube');
+      if (isSearchLink(links.ytmusic)) missing.push('YouTube Music');
+      if (isSearchLink(links.spotify)) missing.push('Spotify');
+      if (isSearchLink(links.applemusic)) missing.push('Apple Music');
+      if (missing.length === 0) return '';
+
+      const reasons = [...new Set(networkIssues)];
+      const detail = reasons.length ? ` Details: ${reasons.join('; ')}.` : ' No exact match was found.';
+      return `Direct links for ${missing.join(', ')} could not be retrieved, so search links are shown instead.${detail}`;
+    }
+
+    // Without Odesli, a Spotify link can still give the title and artwork through Spotify's oEmbed
+    /** @returns {Promise<SearchResult | null>} */
+    async function handlePlatformUrlFallback(cleanUrl) {
+      let host = '';
+      try { host = new URL(cleanUrl).hostname; } catch (e) { return null; }
+      if (!host.includes('spotify.com')) return null;
+
+      const oembed = await fetchJson('Spotify oEmbed', `https://open.spotify.com/oembed?url=${encodeURIComponent(cleanUrl)}`);
+      if (!oembed || !oembed.title) return null;
+
+      const title = oembed.title;
+      return {
+        song: { title, artist: '', artwork: normalizeImageUrl(oembed.thumbnail_url) },
+        links: {
+          youtube: generateSearchUrl('youtube', title),
+          ytmusic: generateSearchUrl('ytmusic', title),
+          spotify: cleanUrl,
+          applemusic: generateSearchUrl('applemusic', title)
+        }
+      };
+    }
+
     async function handleSearch(e) {
       e.preventDefault();
       const input = queryInput.value.trim();
       if (!input) return;
 
       const searchId = ++activeSearchId;
+      networkIssues = [];
 
       resultsDiv.classList.add('hidden');
       errorDiv.classList.add('hidden');
@@ -494,7 +608,9 @@
             // Fallback for YouTube links when Odesli API fails
             result = await handleYouTubeFallback(ytId);
           } else if (!result) {
-            throw new Error('Could not resolve links from this URL.');
+            // Spotify links can still be partly resolved without Odesli
+            result = await handlePlatformUrlFallback(cleanUrl);
+            if (!result) throw new Error('Could not resolve links from this URL.');
           }
         } else {
           // Plain text query, e.g. "Artist - Title"
@@ -502,10 +618,11 @@
         }
 
         if (searchId !== activeSearchId) return;
-        displayResults(result.song, result.links);
+        displayResults(result.song, result.links, buildNotice(result.links));
       } catch (err) {
         if (searchId !== activeSearchId) return;
-        showError('Could not retrieve song data. Please verify the URL or try searching by "Artist - Title".');
+        const reasons = [...new Set(networkIssues)];
+        showError('Could not retrieve song data. Please verify the URL or try searching by "Artist - Title".' + (reasons.length ? ` Details: ${reasons.join('; ')}.` : ''));
       } finally {
         if (searchId === activeSearchId) {
           loadingDiv.classList.add('hidden');
@@ -550,10 +667,8 @@
     async function tryOdesliApi(cleanUrl, ytId) {
       try {
         const apiUrl = `https://api.song.link/v1-alpha.1/links?url=${encodeURIComponent(cleanUrl)}`;
-        const response = await fetch(apiUrl);
-        if (!response.ok) return null;
-
-        const data = await response.json();
+        const data = await fetchJson('Odesli', apiUrl);
+        if (!data) return null;
         const linksByPlatform = data.linksByPlatform || {};
 
         let songTitle = 'Music Links';
@@ -610,10 +725,9 @@
       let songTitle = 'YouTube Video';
       let videoThumbnail = '';
       try {
-        const oembedRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${ytId}&format=json`);
-        if (oembedRes.ok) {
-          const oembedData = await oembedRes.json();
-          songTitle = oembedData.title.replace(/\s*\(Official Video\)/i, '').replace(/\s*\(Audio\)/i, '').trim();
+        const oembedData = await fetchJson('YouTube oEmbed', `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${ytId}&format=json`);
+        if (oembedData) {
+          songTitle = cleanVideoTitle(oembedData.title);
           videoThumbnail = normalizeImageUrl(oembedData.thumbnail_url);
         }
       } catch (e) {}
@@ -623,8 +737,8 @@
 
       return {
         song: {
-          title: enriched.trackName || songTitle,
-          artist: enriched.artist || '',
+          title: enriched.trackName || splitArtistTitle(songTitle).title,
+          artist: enriched.artist || splitArtistTitle(songTitle).artist,
           artwork: enriched.artwork || videoThumbnail
         },
         links: {
@@ -643,8 +757,8 @@
 
       return {
         song: {
-          title: enriched.trackName || titleQuery,
-          artist: enriched.artist || '',
+          title: enriched.trackName || splitArtistTitle(titleQuery).title,
+          artist: enriched.artist || splitArtistTitle(titleQuery).artist,
           artwork: enriched.artwork || ''
         },
         links: {
@@ -658,9 +772,8 @@
 
     async function searchiTunesFallback(query) {
       try {
-        const itunesRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&limit=1&entity=song`);
-        if (itunesRes.ok) {
-          const itunesData = await itunesRes.json();
+        const itunesData = await queryItunes(query);
+        if (itunesData) {
           if (itunesData.results && itunesData.results.length > 0) {
             const track = itunesData.results[0];
             const cleanTitle = `${track.artistName} - ${track.trackName}`;
@@ -672,9 +785,8 @@
             let ytUrl = '';
             let ytmUrl = '';
             try {
-              const odesliRes = await fetch(`https://api.song.link/v1-alpha.1/links?url=${encodeURIComponent(appleMusicUrl)}`);
-              if (odesliRes.ok) {
-                const odesliData = await odesliRes.json();
+              const odesliData = await fetchJson('Odesli', `https://api.song.link/v1-alpha.1/links?url=${encodeURIComponent(appleMusicUrl)}`);
+              if (odesliData) {
                 spotifyUrl = sanitizeUrl(odesliData.linksByPlatform?.spotify?.url || '');
                 ytUrl = odesliData.linksByPlatform?.youtube?.url || '';
                 ytmUrl = odesliData.linksByPlatform?.youtubeMusic?.url || '';
@@ -775,7 +887,7 @@
         : 'Embedding needs a direct Spotify or Apple Music track link';
     }
 
-    function displayResults(song, links) {
+    function displayResults(song, links, notice = '') {
       const label = formatSongLabel(song);
       currentData = { song, links, label };
 
@@ -797,6 +909,10 @@
       document.getElementById('markdown-preview').value = markdown;
 
       updateEmbedButton();
+
+      const noticeEl = document.getElementById('notice');
+      noticeEl.textContent = notice;
+      noticeEl.classList.toggle('hidden', !notice);
 
       resultsDiv.classList.remove('hidden');
       resultsDiv.classList.remove('result-in');
